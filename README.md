@@ -2,6 +2,8 @@
 
 🇵🇱 [Wersja polska](README.pl.md)
 
+**Status: working prototype.** Built as a portfolio project — it runs end to end on the free WhatsApp test number, but a client deployment would still need Meta business verification and a production number.
+
 An n8n workflow that answers WhatsApp messages for a beauty salon: FAQ questions get an instant reply from a Google Sheets knowledge base, booking requests get the three nearest free slots from Google Calendar, and anything risky — complaints, urgent matters, low-confidence classifications — goes straight to a human with an email notification. Every conversation lands in a log sheet, so the owner can see exactly how many inquiries the bot handled on its own.
 
 I built this because I kept seeing the same pattern at marketing agencies: a Facebook campaign works, inquiries pour into WhatsApp, and the receptionist — who has two hands and one phone — answers them hours later. By then a chunk of those leads has already booked with a competitor. The ad budget pays for inquiries that die in the inbox. This bot cuts the response time from hours to seconds without pretending it can handle everything.

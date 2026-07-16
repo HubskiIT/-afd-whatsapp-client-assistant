@@ -2,6 +2,8 @@
 
 🇬🇧 [English version](README.md)
 
+**Status: działający prototyp.** Projekt portfolio — działa end to end na darmowym numerze testowym WhatsApp, ale wdrożenie u klienta wymaga jeszcze weryfikacji biznesowej Mety i numeru produkcyjnego.
+
 Workflow n8n, który odpowiada na wiadomości WhatsApp w imieniu salonu kosmetycznego: pytania z FAQ dostają natychmiastową odpowiedź z bazy w Google Sheets, prośby o wizytę — trzy najbliższe wolne terminy z Google Calendar, a wszystko ryzykowne (reklamacje, sprawy pilne, niepewne klasyfikacje) trafia od razu do człowieka razem z powiadomieniem mailowym. Każda rozmowa ląduje w arkuszu-logu, więc właściciel widzi czarno na białym, ile zapytań bot obsłużył sam.
 
 Zbudowałem to, bo w agencjach marketingowych wciąż powtarza się ten sam schemat: kampania na Facebooku działa, zapytania sypią się na WhatsAppa, a recepcjonistka — która ma dwie ręce i jeden telefon — odpisuje po kilku godzinach. W tym czasie część leadów zdążyła się umówić u konkurencji. Budżet reklamowy płaci za zapytania, które umierają w skrzynce. Ten bot skraca czas odpowiedzi z godzin do sekund i nie udaje, że umie obsłużyć wszystko.
