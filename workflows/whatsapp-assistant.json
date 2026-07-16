@@ -1,0 +1,849 @@
+{
+  "name": "WhatsApp AI Assistant (salon kosmetyczny)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-verify-get",
+      "name": "Webhook Verify (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        600
+      ],
+      "webhookId": "whatsapp-verify"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.query['hub.verify_token'] }}",
+              "rightValue": "={{ $env.WHATSAPP_VERIFY_TOKEN }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-verify-token",
+      "name": "Check Verify Token",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.query['hub.challenge'] }}",
+        "options": {}
+      },
+      "id": "respond-challenge",
+      "name": "Respond Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Forbidden",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "id": "respond-forbidden",
+      "name": "Respond Forbidden",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp",
+        "responseMode": "onReceived",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "wh-messages-post",
+      "name": "Webhook Messages (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "whatsapp-messages"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Weryfikacja podpisu X-Hub-Signature-256 od Mety.\n// Wymaga: NODE_FUNCTION_ALLOW_BUILTIN=crypto w środowisku n8n oraz opcji \"Raw Body\" na webhooku.\nconst crypto = require('crypto');\n\nconst appSecret = $env.WHATSAPP_APP_SECRET;\nif (!appSecret) {\n  throw new Error('Brak WHATSAPP_APP_SECRET w zmiennych srodowiskowych n8n');\n}\n\nconst signatureHeader = $json.headers['x-hub-signature-256'];\nif (!signatureHeader) {\n  throw new Error('Brak naglowka X-Hub-Signature-256 - zadanie odrzucone');\n}\n\nconst rawBody = Buffer.from($input.item.binary.data.data, 'base64');\nconst expected = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');\n\nconst a = Buffer.from(signatureHeader);\nconst b = Buffer.from(expected);\nif (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {\n  throw new Error('Niepoprawny podpis webhooka - zadanie odrzucone');\n}\n\nreturn { json: JSON.parse(rawBody.toString('utf8')) };"
+      },
+      "id": "code-verify-signature",
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Wyciaga nadawce i tresc z payloadu WhatsApp Cloud API.\n// Statusy doreczen (sent/delivered/read) i wiadomosci nietekstowe koncza wykonanie bez odpowiedzi.\nconst out = [];\nfor (const item of $input.all()) {\n  const value = item.json.entry?.[0]?.changes?.[0]?.value;\n  const msg = value?.messages?.[0];\n  if (!msg || msg.type !== 'text') continue;\n  out.push({ json: {\n    from: msg.from,\n    text: msg.text.body,\n    name: value.contacts?.[0]?.profile?.name || '',\n    messageId: msg.id,\n  } });\n}\nreturn out;"
+      },
+      "id": "code-parse-message",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Buduje request do OpenAI: klasyfikacja intencji na 4 kategorie.\nconst system = [\n  'Jestes klasyfikatorem wiadomosci przychodzacych do salonu kosmetycznego.',\n  'Przypisz wiadomosc klienta do dokladnie jednej kategorii:',\n  '- \"faq\": pytanie o cennik, godziny otwarcia, adres, platnosci, przebieg zabiegow',\n  '- \"rezerwacja\": chec umowienia, przelozenia lub odwolania wizyty',\n  '- \"eskalacja\": reklamacja, sprawa pilna, niezadowolony klient, prosba o rozmowe z czlowiekiem',\n  '- \"inne\": nic z powyzszych',\n  'Odpowiedz wylacznie obiektem JSON: {\"intent\": \"<kategoria>\", \"confidence\": <0.0-1.0>}.',\n  'Jesli nie masz pewnosci, obniz confidence - lepiej eskalowac niz zgadywac.',\n].join('\\n');\n\nreturn { json: {\n  body: {\n    model: 'gpt-4o-mini',\n    temperature: 0,\n    response_format: { type: 'json_object' },\n    messages: [\n      { role: 'system', content: system },\n      { role: 'user', content: $json.text },\n    ],\n  },\n} };"
+      },
+      "id": "code-build-classification",
+      "name": "Build Classification Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "http-classify",
+      "name": "Classify Intent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Zasada bezpieczna: przy niskiej pewnosci lub kategorii \"inne\" eskalujemy do czlowieka.\nconst src = $('Parse Message').first().json;\nconst MIN_CONFIDENCE = 0.7;\n\nlet intent = 'eskalacja';\nlet confidence = 0;\ntry {\n  const parsed = JSON.parse($json.choices[0].message.content);\n  intent = parsed.intent;\n  confidence = Number(parsed.confidence) || 0;\n} catch (e) {\n  // model zwrocil niepoprawny JSON -> eskalacja\n}\n\nconst routable = ['faq', 'rezerwacja'];\nif (!routable.includes(intent) || confidence < MIN_CONFIDENCE) {\n  intent = 'eskalacja';\n}\n\nreturn { json: { ...src, intent, confidence } };"
+      },
+      "id": "code-parse-intent",
+      "name": "Parse Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "faq",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "faq"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r2",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "rezerwacja",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "rezerwacja"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r3",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "eskalacja",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "eskalacja"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": 2
+        }
+      },
+      "id": "switch-intent",
+      "name": "Route by Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.FAQ_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "FAQ",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "sheets-read-faq",
+      "name": "Read FAQ Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1540,
+        -200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sklada baze FAQ z arkusza w prompt i buduje request do OpenAI.\nconst rows = $input.all().map((i) => i.json).filter((r) => r.question && r.answer);\nconst faq = rows.map((r) => 'P: ' + r.question + '\\nO: ' + r.answer).join('\\n\\n');\nconst customer = $('Parse Message').first().json;\n\nconst system = [\n  'Jestes recepcjonistka salonu kosmetycznego i odpisujesz klientom na WhatsAppie.',\n  'Odpowiadasz po polsku, krotko (1-2 zdania), naturalnie i uprzejmie.',\n  'Wolno Ci korzystac WYLACZNIE z ponizszej bazy FAQ - niczego nie zmyslaj:',\n  '',\n  faq,\n  '',\n  'Jesli baza odpowiada na pytanie klienta, sformuluj odpowiedz wlasnymi slowami.',\n  'Jesli baza NIE zawiera odpowiedzi, ustaw found na false i zostaw reply puste.',\n  'Odpowiedz wylacznie obiektem JSON: {\"found\": true|false, \"reply\": \"<odpowiedz>\"}.',\n].join('\\n');\n\nreturn [{ json: {\n  body: {\n    model: 'gpt-4o-mini',\n    temperature: 0.3,\n    response_format: { type: 'json_object' },\n    messages: [\n      { role: 'system', content: system },\n      { role: 'user', content: customer.text },\n    ],\n  },\n} }];"
+      },
+      "id": "code-build-faq",
+      "name": "Build FAQ Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "http-faq-answer",
+      "name": "Compose FAQ Answer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        -200
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parsuje odpowiedz FAQ; brak dopasowania kieruje do galezi eskalacji.\nconst src = $('Parse Message').first().json;\nlet found = false;\nlet reply = '';\ntry {\n  const parsed = JSON.parse($json.choices[0].message.content);\n  reply = (parsed.reply || '').trim();\n  found = parsed.found === true && reply !== '';\n} catch (e) {\n  // niepoprawny JSON -> found zostaje false -> eskalacja\n}\nreturn { json: { from: src.from, text: src.text, name: src.name, intent: 'faq', found, reply, handled_by: 'bot' } };"
+      },
+      "id": "code-parse-faq",
+      "name": "Parse FAQ Answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f1",
+              "leftValue": "={{ $json.found }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-faq-found",
+      "name": "FAQ Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "operation": "availability",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $env.GOOGLE_CALENDAR_ID }}",
+          "mode": "id"
+        },
+        "timeMin": "={{ $now.toISO() }}",
+        "timeMax": "={{ $now.plus({ days: 7 }).toISO() }}",
+        "options": {
+          "outputFormat": "raw"
+        }
+      },
+      "id": "gcal-availability",
+      "name": "Get Calendar Busy Times",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        1540,
+        0
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Godziny pracy salonu: pn-pt 9:00-19:00, sobota 9:00-14:00 (Europe/Warsaw).\n// Proponujemy 3 najblizsze wolne sloty po 60 minut, z min. 2h wyprzedzeniem.\nconst TZ = 'Europe/Warsaw';\nconst OPEN_HOURS = { 1: [9, 19], 2: [9, 19], 3: [9, 19], 4: [9, 19], 5: [9, 19], 6: [9, 14], 7: null };\nconst DAY_NAMES = { 1: 'pon', 2: 'wt', 3: 'sr', 4: 'czw', 5: 'pt', 6: 'sob', 7: 'niedz' };\n\nconst src = $('Parse Message').first().json;\n\n// zajete przedzialy z odpowiedzi freeBusy (format raw) lub listy slotow\nconst busy = [];\nfor (const item of $input.all()) {\n  const cals = item.json.calendars;\n  if (cals) {\n    for (const key of Object.keys(cals)) {\n      for (const b of cals[key].busy || []) busy.push({ start: new Date(b.start), end: new Date(b.end) });\n    }\n  } else if (item.json.start && item.json.end) {\n    busy.push({ start: new Date(item.json.start), end: new Date(item.json.end) });\n  }\n}\n\nconst fmt = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: false });\nconst weekdayMap = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };\nfunction warsawParts(date) {\n  const parts = {};\n  for (const p of fmt.formatToParts(date)) parts[p.type] = p.value;\n  return { weekday: weekdayMap[parts.weekday], hour: Number(parts.hour) % 24 };\n}\nconst dateFmt = new Intl.DateTimeFormat('pl-PL', { timeZone: TZ, day: '2-digit', month: '2-digit' });\nconst overlaps = (start, end) => busy.some((b) => start < b.end && b.start < end);\n\n// hak testowy: testy e2e wstrzykuja staly czas przez __testNow\nconst now = $json.__testNow ? new Date($json.__testNow) : new Date();\nconst HOUR = 3600000;\nconst firstSlot = Math.ceil((now.getTime() + 2 * HOUR) / HOUR) * HOUR;\n\nconst slots = [];\nfor (let ts = firstSlot; ts < now.getTime() + 7 * 24 * HOUR && slots.length < 3; ts += HOUR) {\n  const start = new Date(ts);\n  const { weekday, hour } = warsawParts(start);\n  const hours = OPEN_HOURS[weekday];\n  if (!hours) continue;\n  if (hour < hours[0] || hour + 1 > hours[1]) continue;\n  const end = new Date(ts + HOUR);\n  if (overlaps(start, end)) continue;\n  slots.push({ start, weekday, hour });\n}\n\nlet reply;\nif (slots.length === 0) {\n  reply = 'W najblizszych dniach nie mamy wolnych terminow. Przekazalam Twoja prosbe do recepcji - odezwiemy sie, zeby znalezc dogodny termin.';\n} else {\n  const lines = slots.map((s) => '- ' + DAY_NAMES[s.weekday] + ' ' + dateFmt.format(s.start) + ' o ' + String(s.hour).padStart(2, '0') + ':00');\n  reply = 'Najblizsze wolne terminy:\\n' + lines.join('\\n') + '\\nOdpisz, ktory pasuje, a potwierdzimy wizyte.';\n}\n\nreturn [{ json: { from: src.from, text: src.text, name: src.name, intent: 'rezerwacja', reply, handled_by: 'bot' } }];"
+      },
+      "id": "code-pick-slots",
+      "name": "Pick Free Slots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.ESCALATION_NOTIFY_EMAIL }}",
+        "subject": "=[WhatsApp] Wiadomosc wymaga odpowiedzi - {{ $('Parse Message').first().json.from }}",
+        "emailType": "text",
+        "message": "=Klient: {{ $('Parse Message').first().json.name }} ({{ $('Parse Message').first().json.from }})\n\nWiadomosc:\n{{ $('Parse Message').first().json.text }}\n\nBot nie obsluzyl tej wiadomosci automatycznie - odpisz klientowi na WhatsApp.",
+        "options": {}
+      },
+      "id": "gmail-notify",
+      "name": "Notify Reception",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1",
+              "name": "from",
+              "value": "={{ $('Parse Message').first().json.from }}",
+              "type": "string"
+            },
+            {
+              "id": "e2",
+              "name": "text",
+              "value": "={{ $('Parse Message').first().json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "e3",
+              "name": "name",
+              "value": "={{ $('Parse Message').first().json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "e4",
+              "name": "intent",
+              "value": "={{ $('Parse Intent').first().json.intent }}",
+              "type": "string"
+            },
+            {
+              "id": "e5",
+              "name": "reply",
+              "value": "Dziekuje za wiadomosc! Przekazalam ja do naszego zespolu - odezwiemy sie do Ciebie najszybciej jak to mozliwe.",
+              "type": "string"
+            },
+            {
+              "id": "e6",
+              "name": "handled_by",
+              "value": "human",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-escalation-reply",
+      "name": "Set Escalation Reply",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "noop-reply-ready",
+      "name": "Reply Ready",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "phoneNumberId": "={{ $env.WHATSAPP_PHONE_NUMBER_ID }}",
+        "recipientPhoneNumber": "={{ $json.from }}",
+        "textBody": "={{ $json.reply }}"
+      },
+      "id": "whatsapp-send",
+      "name": "Send WhatsApp Reply",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        0
+      ],
+      "credentials": {
+        "whatsAppApi": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.LOG_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $now.toISO() }}",
+            "customer_phone": "={{ $('Reply Ready').first().json.from }}",
+            "message": "={{ $('Reply Ready').first().json.text }}",
+            "intent": "={{ $('Reply Ready').first().json.intent }}",
+            "handled_by": "={{ $('Reply Ready').first().json.handled_by }}",
+            "response": "={{ $('Reply Ready').first().json.reply }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "sheets-log",
+      "name": "Log Conversation",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3080,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Verify (GET)": {
+      "main": [
+        [
+          {
+            "node": "Check Verify Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Verify Token": {
+      "main": [
+        [
+          {
+            "node": "Respond Challenge",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Forbidden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Messages (POST)": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Signature": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Build Classification Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Classification Request": {
+      "main": [
+        [
+          {
+            "node": "Classify Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Intent": {
+      "main": [
+        [
+          {
+            "node": "Parse Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Intent": {
+      "main": [
+        [
+          {
+            "node": "Route by Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Intent": {
+      "main": [
+        [
+          {
+            "node": "Read FAQ Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Calendar Busy Times",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Reception",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read FAQ Sheet": {
+      "main": [
+        [
+          {
+            "node": "Build FAQ Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build FAQ Request": {
+      "main": [
+        [
+          {
+            "node": "Compose FAQ Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose FAQ Answer": {
+      "main": [
+        [
+          {
+            "node": "Parse FAQ Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse FAQ Answer": {
+      "main": [
+        [
+          {
+            "node": "FAQ Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FAQ Found?": {
+      "main": [
+        [
+          {
+            "node": "Reply Ready",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Reception",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Calendar Busy Times": {
+      "main": [
+        [
+          {
+            "node": "Pick Free Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Free Slots": {
+      "main": [
+        [
+          {
+            "node": "Reply Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Reception": {
+      "main": [
+        [
+          {
+            "node": "Set Escalation Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Escalation Reply": {
+      "main": [
+        [
+          {
+            "node": "Reply Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply Ready": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp Reply": {
+      "main": [
+        [
+          {
+            "node": "Log Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Warsaw"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asystent WhatsApp — podgląd rozmowy</title>
+<style>
+  :root {
+    --bg: #efeae2;
+    --header: #008069;
+    --in: #ffffff;
+    --out: #d9fdd3;
+    --text: #111b21;
+    --meta: #667781;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f0f2f5;
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 12px 48px;
+  }
+  h1 { font-size: 1.3rem; margin-bottom: 4px; }
+  .sub { color: var(--meta); font-size: .9rem; margin-bottom: 24px; text-align: center; max-width: 640px; }
+  .sub a { color: var(--header); }
+  .phones { display: flex; flex-wrap: wrap; gap: 24px; justify-content: center; }
+  .phone {
+    width: 340px;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 6px 24px rgba(0,0,0,.15);
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+  }
+  .phone header {
+    background: var(--header);
+    color: #fff;
+    padding: 12px 16px;
+    font-size: .95rem;
+    font-weight: 600;
+  }
+  .phone header small { display: block; font-weight: 400; opacity: .85; font-size: .75rem; }
+  .chat { padding: 14px 10px 18px; display: flex; flex-direction: column; gap: 8px; min-height: 340px; }
+  .msg {
+    max-width: 82%;
+    padding: 7px 10px 8px;
+    border-radius: 8px;
+    font-size: .88rem;
+    line-height: 1.35;
+    position: relative;
+    box-shadow: 0 1px 1px rgba(0,0,0,.08);
+    white-space: pre-line;
+  }
+  .msg time { display: block; font-size: .65rem; color: var(--meta); text-align: right; margin-top: 3px; }
+  .in  { background: var(--in);  align-self: flex-start; border-top-left-radius: 0; }
+  .out { background: var(--out); align-self: flex-end;   border-top-right-radius: 0; }
+  .note {
+    align-self: center;
+    background: #fff6d8;
+    border-radius: 8px;
+    font-size: .72rem;
+    color: #54656f;
+    padding: 5px 10px;
+    text-align: center;
+    max-width: 90%;
+  }
+  .caption { font-size: .8rem; color: var(--meta); text-align: center; padding: 10px 14px 14px; background: #fff; }
+</style>
+</head>
+<body>
+
+<h1>Asystent AI na WhatsAppie — tak wygląda efekt</h1>
+<p class="sub">
+  Trzy prawdziwe scenariusze z <a href="https://github.com/HubskiIT/-afd-whatsapp-client-assistant">workflow n8n</a>:
+  odpowiedź z bazy FAQ, propozycja terminów z kalendarza i eskalacja reklamacji do człowieka.
+  Czas odpowiedzi bota: kilka sekund.
+</p>
+
+<div class="phones">
+
+  <div class="phone">
+    <header>Salon Kwiatowa 12 <small>WhatsApp Business</small></header>
+    <div class="chat">
+      <div class="msg in">Ile kosztuje manicure hybrydowy?<time>14:02</time></div>
+      <div class="msg out">Manicure hybrydowy kosztuje 120 zł, a wizyta trwa około godziny. Zapraszamy! 💅<time>14:02</time></div>
+      <div class="msg in">A czy mogę zapłacić kartą?<time>14:03</time></div>
+      <div class="msg out">Tak, przyjmujemy płatność kartą, blikiem oraz gotówką.<time>14:03</time></div>
+    </div>
+    <div class="caption">Odpowiedzi z bazy FAQ w Google Sheets — recepcja edytuje arkusz, bot odpowiada aktualnymi cenami.</div>
+  </div>
+
+  <div class="phone">
+    <header>Salon Kwiatowa 12 <small>WhatsApp Business</small></header>
+    <div class="chat">
+      <div class="msg in">Dzień dobry, chciałabym umówić się na mikrodermabrazję 😊<time>9:41</time></div>
+      <div class="msg out">Najbliższe wolne terminy:
+- pon 20.07 o 11:00
+- pon 20.07 o 14:00
+- wt 21.07 o 9:00
+Odpisz, który pasuje, a potwierdzimy wizytę.<time>9:41</time></div>
+      <div class="msg in">Poniedziałek 14:00 poproszę!<time>9:44</time></div>
+      <div class="msg note">Potwierdzenie wizyty pozostaje po stronie recepcji — bot proponuje wyłącznie realnie wolne sloty z Google Calendar.</div>
+    </div>
+    <div class="caption">Terminy liczone z zajętości kalendarza: godziny otwarcia pn–pt 9–19, sob 9–14, minimum 2h wyprzedzenia.</div>
+  </div>
+
+  <div class="phone">
+    <header>Salon Kwiatowa 12 <small>WhatsApp Business</small></header>
+    <div class="chat">
+      <div class="msg in">Jestem bardzo niezadowolona z wczorajszego zabiegu, skóra mnie piecze. Chcę zwrot!<time>18:17</time></div>
+      <div class="msg out">Dziękuję za wiadomość! Przekazałam ją do naszego zespołu — odezwiemy się do Ciebie najszybciej jak to możliwe.<time>18:17</time></div>
+      <div class="msg note">📧 Recepcja dostała maila z pełną treścią i numerem klientki.
+Zasada bezpieczna: reklamacje, sprawy pilne i niepewne klasyfikacje nigdy nie są obsługiwane automatycznie.</div>
+    </div>
+    <div class="caption">Każda rozmowa trafia do logu: intencja, kto obsłużył (bot/człowiek), treść — gotowa statystyka dla agencji.</div>
+  </div>
+
+</div>
+
+</body>
+</html>

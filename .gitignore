@@ -1,0 +1,10 @@
+# sekrety
+.env
+
+# system / edytory
+.DS_Store
+node_modules/
+
+# robocze briefy projektowe - zostaja lokalnie, nie sa czescia publicznego repo
+projekt1_asystent_wiadomosci_brief.md
+standard_prezentacji_portfolio.md
